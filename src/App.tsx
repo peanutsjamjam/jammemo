@@ -228,7 +228,14 @@ function App() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <h1 className="logo">
-            <a href={import.meta.env.BASE_URL}>jam memo</a>
+            <a href={import.meta.env.BASE_URL}>
+              <img
+                className="logo-icon"
+                src={import.meta.env.BASE_URL + 'favicon.svg'}
+                alt=""
+              />
+              jam memo
+            </a>
           </h1>
           <button type="button" className="add-button" onClick={addMemo}>
             <Plus size={16} />
