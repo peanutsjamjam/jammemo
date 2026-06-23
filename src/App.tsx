@@ -325,9 +325,9 @@ function App() {
               <h3 className="settings-label">フォントサイズ</h3>
               {(
                 [
+                  ['listSize', 'メモ一覧（左）'],
                   ['titleSize', 'メモのタイトル（右）'],
                   ['contentSize', 'メモの本文（右）'],
-                  ['listSize', 'メモ一覧（左）'],
                 ] as [keyof AppSettings, string][]
               ).map(([key, label]) => (
                 <div key={key} className="size-row">
