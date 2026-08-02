@@ -15,10 +15,14 @@
    │  fetch (GET/POST/PUT/DELETE)
    ▼
 api.cgi (Perl CGI)  ──  memo_data/*.txt  (1メモ=1ファイル)
+   │
+   └─ PostgreSQL "jammemo" (users / sessions)  ← ログイン情報だけ
 ```
 
 - **フロント**: Vite + React + TypeScript。`dist/` に本番ビルド。
 - **バックエンド**: `api.cgi`（Perl）。`memo_data/` にテキストファイルで保存。
+- **ログイン**: メモの読み書きには**ログインが必要**。ユーザー情報は PostgreSQL の
+  `jammemo` データベースに置く（メモ本体は従来どおりファイル）。詳細は `ddl/README.md`。
 - **配信**: Apache の UserDir（`~/public_html/jammemo/` → `/~sugawara/jammemo/`）。
 - **保存形式**: 1メモ＝1ファイル。ファイル名は `YYYY_MM_DD_NNNN.txt`（日付＋連番、タイトルは使わない）。
   ファイルの **1行目＝タイトル、2行目＝作成日時、3行目＝最終更新日時、4行目以降＝内容**。
@@ -46,10 +50,11 @@ api.cgi (Perl CGI)  ──  memo_data/*.txt  (1メモ=1ファイル)
 
 | ファイル | 役割 |
 |----------|------|
-| `src/App.tsx` | アプリ本体（一覧・編集・追加・削除・確認モーダル・設定画面） |
+| `src/App.tsx` | アプリ本体（ログイン画面・一覧・編集・追加・削除・確認モーダル・設定画面） |
 | `src/App.css` / `src/index.css` | レイアウトとスタイル（ライト/ダーク対応） |
-| `api.cgi` | 保存API（Perl）。GET=一覧 / POST=新規 / PUT=保存 / DELETE=削除 |
-| `memo_data/` | メモの保存先（`YYYY_MM_DD_NNNN.txt`） |
+| `api.cgi` | 保存API（Perl）。GET=一覧 / POST=新規 / PUT=保存 / DELETE=削除、`?action=login/logout/me` |
+| `ddl/` | ログイン用 DB のスキーマとアカウント作成手順（`README.md` / `passwd.pl`） |
+| `memo_data/` | メモの保存先（`YYYY_MM_DD_NNNN.txt`）。`.htaccess` で Web から直接読めないようにしてある |
 | `.htaccess` | `/~sugawara/jammemo/` を `dist/` へ透過配信＋`.cgi` 実行 |
 | `vite.config.ts` | `base: '/~sugawara/jammemo/'`（サブパス配信用） |
 

@@ -1,0 +1,7 @@
+# メモの実体を Web から直接読めないようにする。
+# 親の .htaccess は「実在するファイルはそのまま配信」するため、これが無いと
+# memo_data/*.txt が URL 直打ちで取得でき、autoindex でファイル名一覧まで出る。
+# メモの読み書きは api.cgi（要ログイン）経由だけに限る。
+# Options -Indexes は AllowOverride で許可されていないので置けない（500 になる）。
+# Require all denied だけでファイル取得も autoindex もまとめて拒否できる。
+Require all denied

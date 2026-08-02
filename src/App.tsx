@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Plus, Trash2, Settings } from 'lucide-react'
+import { Plus, Trash2, Settings, LogOut } from 'lucide-react'
 import './App.css'
 
 type Memo = {
@@ -56,9 +56,43 @@ function sortDesc(memos: Memo[]): Memo[] {
   return [...memos].sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 }
 
+// ログイン中のアカウント。新規登録の UI は無く、アカウントは DB へ直接入れる。
+type Account = { username: string; email: string }
+
+// セッション切れ（サーバーが 401 を返した）。呼び出し側でログイン画面に戻すのに使う。
+class AuthError extends Error {}
+
+// 401 ならログイン画面に戻す必要があるので、他のエラーと区別して投げる。
+function failed(res: Response, message: string): Error {
+  return res.status === 401 ? new AuthError('ログインが必要です') : new Error(message)
+}
+
+async function apiMe(): Promise<Account> {
+  const res = await fetch(`${API}?action=me`)
+  if (!res.ok) throw failed(res, 'ログイン状態の確認に失敗しました')
+  return res.json()
+}
+
+async function apiLogin(email: string, password: string): Promise<Account> {
+  const res = await fetch(`${API}?action=login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  if (res.status === 401) {
+    throw new Error('メールアドレスまたはパスワードが違います')
+  }
+  if (!res.ok) throw new Error('ログインに失敗しました')
+  return res.json()
+}
+
+async function apiLogout(): Promise<void> {
+  await fetch(`${API}?action=logout`, { method: 'POST' })
+}
+
 async function apiList(): Promise<Memo[]> {
   const res = await fetch(API)
-  if (!res.ok) throw new Error('一覧の取得に失敗しました')
+  if (!res.ok) throw failed(res, '一覧の取得に失敗しました')
   return res.json()
 }
 
@@ -70,13 +104,13 @@ async function apiExample(): Promise<{
   updated?: number
 }> {
   const res = await fetch(`${API}?example=1`)
-  if (!res.ok) throw new Error('サンプルの取得に失敗しました')
+  if (!res.ok) throw failed(res, 'サンプルの取得に失敗しました')
   return res.json()
 }
 
 async function apiCreate(): Promise<Memo> {
   const res = await fetch(API, { method: 'POST' })
-  if (!res.ok) throw new Error('作成に失敗しました')
+  if (!res.ok) throw failed(res, '作成に失敗しました')
   return res.json()
 }
 
@@ -86,7 +120,7 @@ async function apiSave(memo: Memo): Promise<{ updated?: number }> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: memo.title, content: memo.content }),
   })
-  if (!res.ok) throw new Error('保存に失敗しました')
+  if (!res.ok) throw failed(res, '保存に失敗しました')
   return res.json()
 }
 
@@ -94,12 +128,83 @@ async function apiDelete(id: string): Promise<void> {
   const res = await fetch(`${API}?id=${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
-  if (!res.ok) throw new Error('削除に失敗しました')
+  if (!res.ok) throw failed(res, '削除に失敗しました')
+}
+
+// ログイン画面。新規登録もパスワード再設定も無い（アカウントは DB へ直接入れる）ので、
+// メールアドレスとパスワードだけの最小構成。
+function LoginView({ onLoggedIn }: { onLoggedIn: (a: Account) => void }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      onLoggedIn(await apiLogin(email.trim(), password))
+    } catch (err) {
+      setError(String((err as Error).message ?? err))
+      setPassword('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="login">
+      <form className="login-card" onSubmit={submit}>
+        <h1 className="login-title">
+          <img
+            className="logo-icon"
+            src={import.meta.env.BASE_URL + 'favicon.svg'}
+            alt=""
+          />
+          jam memo
+        </h1>
+        <label className="login-field">
+          <span>メールアドレス</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            autoFocus
+            required
+          />
+        </label>
+        <label className="login-field">
+          <span>パスワード</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
+        </label>
+        {error && (
+          <p className="login-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button type="submit" className="login-button" disabled={busy}>
+          {busy ? 'ログイン中…' : 'ログイン'}
+        </button>
+      </form>
+    </div>
+  )
 }
 
 function App() {
   const [memos, setMemos] = useState<Memo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // ログイン中のアカウント。null はログイン画面。account を確認するまでは booted=false。
+  const [account, setAccount] = useState<Account | null>(null)
+  const [booted, setBooted] = useState(false)
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState<'saved' | 'saving' | 'error'>('saved')
   // 削除確認モーダルの対象メモID（null のとき非表示）
@@ -133,8 +238,18 @@ function App() {
     }
   }, [settings])
 
-  // 初回ロード：サーバーから一覧取得。空なら空メモを1つ作る
+  // 起動時にセッションを確認する。未ログインならログイン画面へ。
   useEffect(() => {
+    apiMe()
+      .then(setAccount)
+      .catch(() => setAccount(null))
+      .finally(() => setBooted(true))
+  }, [])
+
+  // ログイン後にサーバーから一覧取得。空なら空メモを1つ作る
+  useEffect(() => {
+    if (!account) return
+    let alive = true
     ;(async () => {
       try {
         let list = await apiList()
@@ -142,23 +257,52 @@ function App() {
           list = [await apiCreate()]
         }
         list = sortDesc(list)
+        if (!alive) return
         setMemos(list)
         setSelectedId(list[0].id)
       } catch (e) {
         console.error(e)
-        setStatus('error')
+        if (!alive) return
+        if (e instanceof AuthError) setAccount(null)
+        else setStatus('error')
       } finally {
-        setLoading(false)
+        if (alive) setLoading(false)
       }
     })()
-  }, [])
+    return () => {
+      alive = false
+    }
+  }, [account])
 
   // プレビュー用サンプルを取得（取得失敗は致命的でないので無視）
   useEffect(() => {
+    if (!account) return
     apiExample()
       .then(setExample)
       .catch((e) => console.error(e))
+  }, [account])
+
+  // アンマウント時に保存待ちのタイマーを片付ける
+  useEffect(() => {
+    const timers = saveTimers.current
+    return () => {
+      for (const t of Object.values(timers)) clearTimeout(t)
+    }
   }, [])
+
+  async function logout() {
+    // 保存待ちが残っていると、ログアウト後に 401 になるので先に止める。
+    for (const t of Object.values(saveTimers.current)) clearTimeout(t)
+    saveTimers.current = {}
+    await apiLogout()
+    setAccount(null)
+    setMemos([])
+    setSelectedId(null)
+    setExample(null)
+    setShowSettings(false)
+    setStatus('saved')
+    setLoading(true)
+  }
 
   const selected = memos.find((m) => m.id === selectedId) ?? null
 
@@ -178,7 +322,8 @@ function App() {
         setStatus('saved')
       } catch (e) {
         console.error(e)
-        setStatus('error')
+        if (e instanceof AuthError) setAccount(null)
+        else setStatus('error')
       }
     }, 500)
   }
@@ -198,11 +343,15 @@ function App() {
       setShowSettings(false)
     } catch (e) {
       console.error(e)
-      setStatus('error')
+      if (e instanceof AuthError) setAccount(null)
+      else setStatus('error')
     }
   }
 
   async function deleteMemo(id: string) {
+    // 保存待ちが残っていると、削除後に PUT が飛んで 404 になり「保存エラー」が出る。
+    clearTimeout(saveTimers.current[id])
+    delete saveTimers.current[id]
     try {
       await apiDelete(id)
       let next = memos.filter((m) => m.id !== id)
@@ -215,8 +364,24 @@ function App() {
       if (id === selectedId) setSelectedId(next[0].id)
     } catch (e) {
       console.error(e)
-      setStatus('error')
+      if (e instanceof AuthError) setAccount(null)
+      else setStatus('error')
     }
+  }
+
+  if (!booted) {
+    return <div className="loading">読み込み中…</div>
+  }
+
+  if (!account) {
+    return (
+      <LoginView
+        onLoggedIn={(a) => {
+          setLoading(true)
+          setAccount(a)
+        }}
+      />
+    )
   }
 
   if (loading) {
@@ -302,6 +467,24 @@ function App() {
                 閉じる
               </button>
             </div>
+
+            <section className="settings-section">
+              <h3 className="settings-label">アカウント</h3>
+              <div className="account-row">
+                <span className="account-name">
+                  {account.username}
+                  <span className="account-email">{account.email}</span>
+                </span>
+                <button
+                  type="button"
+                  className="logout-button"
+                  onClick={logout}
+                >
+                  <LogOut size={14} />
+                  ログアウト
+                </button>
+              </div>
+            </section>
 
             <section className="settings-section">
               <h3 className="settings-label">テーマ</h3>

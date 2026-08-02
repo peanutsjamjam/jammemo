@@ -13,8 +13,11 @@ dist-ssr
 *.local
 
 # メモの実データ（ランタイム生成。ディレクトリのみ追跡し中身は除外）
+# ただし .htaccess は Web からの直接アクセスを塞ぐ設定なので追跡する
+# （これが失われるとメモ本文が URL で読めてしまう）
 /memo_data/*
 !/memo_data/.gitkeep
+!/memo_data/.htaccess
 
 # Claude Code のローカル個人設定
 .claude/settings.local.json

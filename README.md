@@ -1,73 +1,36 @@
-# React + TypeScript + Vite
+# jam memo
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+シンプルなメモアプリ。左に一覧、右に編集エリア。メモはサーバーに保存するので、
+どの端末からでも同じ内容が見える。
 
-Currently, two official plugins are available:
+公開URL: https://peanutsjamjam.jp/~sugawara/jammemo/
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+実験用アプリなので、本番用のサイトは無い（このディレクトリが唯一の配信元）。
 
-## React Compiler
+## 構成
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- フロント: React + TypeScript + Vite（`dist/` に本番ビルド）
+- バックエンド: `api.cgi`（Perl CGI）。メモは `memo_data/` にテキストファイルで保存
+- ログイン情報: PostgreSQL の `jammemo` データベース（`users` / `sessions`）
 
-## Expanding the ESLint configuration
+## ログイン
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+メモの読み書きにはログインが必要。**新規登録の UI は無く**、アカウントは DB へ
+直接入れる。手順は [`ddl/README.md`](ddl/README.md) を参照。
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+./ddl/passwd.pl you@example.com yourname | psql -d jammemo
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 開発
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+npm install
+npm run dev      # 開発サーバー
+npm run build    # dist/ を更新 = 公開サイトに反映
+npm run lint
 ```
+
+`api.cgi` はビルド不要で、編集すると即反映される。
+
+詳しい設計と経緯は [`DEVELOPMENT.md`](DEVELOPMENT.md) を参照。
