@@ -59,19 +59,23 @@ my $ID_RE    = qr/^\d{4}_\d{2}_\d{2}_\d{4}$/;
 my $JSON     = JSON::PP->new->utf8;
 
 # ---- 認証まわりの設定 ------------------------------------------------------
-my $DB_NAME      = 'jammemo';
 my $COOKIE_NAME  = 'jammemo_sid';
 my $SESSION_DAYS = 30;
 my $PBKDF2_ITER  = 120000;   # ddl/passwd.pl と揃えること
 # リクエストボディの上限。メモ本文しか送らないので控えめでよい。
 my $MAX_BODY_BYTES = 1024 * 1024;
 
+# 接続する PostgreSQL のデータベース名。env.pl（git 管理外）で上書きできる。
+# env.pl はファイル冒頭の BEGIN で読み込み済みなので、未設定のときだけ既定値を入れる。
+our $JAMMEMO_DB;
+$JAMMEMO_DB = 'jammemo' unless defined $JAMMEMO_DB && length $JAMMEMO_DB;
+
 # 共通ライブラリ PJJ の設定。このアプリと他アプリの違いは、すべてここで吸収する。
 # Cookie の Path（配信 URL のディレクトリ。例 /~sugawara/jammemo/）は
 # PJJ が SCRIPT_NAME から自動判定する。
 PJJ->init(
     app            => 'jam memo',
-    db             => $DB_NAME,
+    db             => $JAMMEMO_DB,
     cookie_name    => $COOKIE_NAME,
     session_days   => $SESSION_DAYS,
     pbkdf2_iter    => $PBKDF2_ITER,
