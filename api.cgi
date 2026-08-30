@@ -23,9 +23,9 @@ BEGIN {
 }
 use PJJ;
 use PJJ::Web;
-use PJJ::Crypt;
 use PJJ::DB;
 use PJJ::Session;
+use PJJ::Auth;
 
 # jam memo 保存API (CGI / Perl)
 #
@@ -76,6 +76,9 @@ PJJ->init(
     session_days   => $SESSION_DAYS,
     pbkdf2_iter    => $PBKDF2_ITER,
     max_body_bytes => $MAX_BODY_BYTES,
+    # 新規登録・パスワード再設定の UI が無いアプリなので、認証は3つだけ受け付ける
+    # （アカウントは ddl/passwd.pl が作る SQL を DB へ直接入れる）。
+    auth_actions   => [qw(login logout me)],
 );
 
 # ---- メモの読み書き --------------------------------------------------------
@@ -196,43 +199,9 @@ my $action = query_param('action') || '';
 eval {
     my $dbh = db();
 
-    # ---- 認証系（ログイン前でも叩ける） ----
-    if ($action eq 'login' && $method eq 'POST') {
-        my $body     = read_body_json();
-        my $email    = defined $body->{email}    ? $body->{email}    : '';
-        my $password = defined $body->{password} ? $body->{password} : '';
-        $email =~ s/^\s+|\s+$//g;
-
-        my $u = $dbh->selectrow_hashref(
-            'SELECT id, username, email, password_hash, salt, iterations
-               FROM users WHERE lower(email) = lower(?)',
-            undef, $email
-        );
-        # ユーザーが居なくてもダミーで PBKDF2 を回す。応答時間の差から
-        # 「そのメールが登録済みか」が分かってしまうのを防ぐため。
-        my $ok = 0;
-        if ($u) {
-            my $hash = pbkdf2($password, $u->{salt}, $u->{iterations});
-            $ok = const_eq($hash, $u->{password_hash});
-        } else {
-            pbkdf2($password, '0' x 32, $PBKDF2_ITER);
-        }
-        fail('invalid_credentials', '401 Unauthorized') unless $ok;
-
-        start_session($dbh, $u->{id});
-        respond({ username => $u->{username}, email => $u->{email} });
-    }
-    elsif ($action eq 'logout' && $method eq 'POST') {
-        my $token = get_cookie($COOKIE_NAME);
-        $dbh->do('DELETE FROM sessions WHERE token = ?', undef, $token)
-            if defined $token && $token =~ /^[0-9a-f]{16,128}$/;
-        clear_session_cookie();
-        respond({ ok => JSON::PP::true });
-    }
-    elsif ($action eq 'me' && $method eq 'GET') {
-        my $u = require_user($dbh);
-        respond({ username => $u->{username}, email => $u->{email} });
-    }
+    # 認証系（ログイン前でも叩ける）は PJJ::Auth が処理する。このアプリは新規登録の UI が
+    # 無いので、受け付けるのは login / logout / me だけ（auth_actions で絞ってある）。
+    auth_dispatch($dbh, $action, $method);
 
     # ---- メモ系（ここから先はすべて要ログイン） ----
     require_user($dbh);
