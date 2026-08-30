@@ -1,14 +1,31 @@
 #!/usr/bin/perl
-# DBI 入りのシステム perl を使う（/usr/local/bin/perl には DBD::Pg が無い）。
+# DBI/DBD::Pg の入ったシステムの perl（/usr/bin/perl）で動かす。DB 接続は PJJ::DB 経由。
 use strict;
 use warnings;
 use utf8;
 use POSIX qw(strftime);
 use JSON::PP;
-use DBI;
-use Digest::SHA qw(hmac_sha256);
 use File::Glob qw(:bsd_glob);
 use File::Basename qw(dirname basename);
+
+# 共通ライブラリ PJJ（サインイン／セッションの土台。github.com/peanutsjamjam/pjj-perl5）を
+# @INC に足す。use はコンパイル時に解決されるので、env.pl の読み込みごと BEGIN の中で行う。
+# 探索順は $ENV{PJJ_LIB}（テスト用）→ $main::PJJ_LIB（env.pl）→ 本番 → dev。
+our $PJJ_LIB;   # env.pl が設定する（未設定なら下のフォールバックを使う）
+BEGIN {
+    require Cwd;   # require は相対パスだと @INC を探すので絶対パスにする
+    my $env_file = Cwd::abs_path(dirname(__FILE__)) . '/env.pl';
+    require $env_file if -f $env_file;
+    my ($lib) = grep { defined && length && -d } (
+        $ENV{PJJ_LIB}, $PJJ_LIB, '/var/lib/perl5', '/home/sugawara/lib/perl5');
+    die "PJJ library not found\n" unless $lib;
+    unshift @INC, $lib;
+}
+use PJJ;
+use PJJ::Web;
+use PJJ::Crypt;
+use PJJ::DB;
+use PJJ::Session;
 
 # jam memo 保存API (CGI / Perl)
 #
@@ -49,134 +66,19 @@ my $PBKDF2_ITER  = 120000;   # ddl/passwd.pl と揃えること
 # リクエストボディの上限。メモ本文しか送らないので控えめでよい。
 my $MAX_BODY_BYTES = 1024 * 1024;
 
-# Cookie の Path は配信 URL のディレクトリ（例 /~sugawara/jammemo/）に合わせる。
-my $COOKIE_PATH = $ENV{SCRIPT_NAME} || '/';
-$COOKIE_PATH =~ s#/[^/]*$#/#;
-$COOKIE_PATH = '/' if $COOKIE_PATH eq '';
+# 共通ライブラリ PJJ の設定。このアプリと他アプリの違いは、すべてここで吸収する。
+# Cookie の Path（配信 URL のディレクトリ。例 /~sugawara/jammemo/）は
+# PJJ が SCRIPT_NAME から自動判定する。
+PJJ->init(
+    app            => 'jam memo',
+    db             => $DB_NAME,
+    cookie_name    => $COOKIE_NAME,
+    session_days   => $SESSION_DAYS,
+    pbkdf2_iter    => $PBKDF2_ITER,
+    max_body_bytes => $MAX_BODY_BYTES,
+);
 
-# Set-Cookie など、respond のときに一緒に出すヘッダ。
-my @EXTRA_HEADERS;
-sub add_header { push @EXTRA_HEADERS, $_[0]; }
-
-sub respond {
-    my ($data, $status) = @_;
-    $status ||= '200 OK';
-    my $body = $JSON->encode($data);
-    binmode STDOUT;
-    print "Status: $status\r\n";
-    print "Content-Type: application/json; charset=utf-8\r\n";
-    print "$_\r\n" for @EXTRA_HEADERS;
-    print "Content-Length: " . length($body) . "\r\n";
-    print "\r\n";
-    print $body;
-    exit 0;
-}
-
-sub fail {
-    my ($message, $status) = @_;
-    $status ||= '400 Bad Request';
-    respond({ error => $message }, $status);
-}
-
-# ---- 認証 ------------------------------------------------------------------
-sub db {
-    my $dbh = DBI->connect(
-        "dbi:Pg:dbname=$DB_NAME", '', '',
-        { RaiseError => 1, AutoCommit => 1, PrintError => 0, pg_enable_utf8 => 1 }
-    ) or fail('db_error', '500 Internal Server Error');
-    return $dbh;
-}
-
-sub random_hex {
-    my ($bytes) = @_;
-    open my $fh, '<:raw', '/dev/urandom' or die "urandom: $!";
-    read($fh, my $buf, $bytes);
-    close $fh;
-    return unpack('H*', $buf);
-}
-
-# PBKDF2-HMAC-SHA256（dkLen = 1ブロック）。ddl/passwd.pl と同じ実装にすること。
-sub pbkdf2 {
-    my ($password, $salt_hex, $iter) = @_;
-    my $salt = pack('H*', $salt_hex);
-    utf8::encode($password) if utf8::is_utf8($password);
-    my $u   = hmac_sha256($salt . pack('N', 1), $password);
-    my $out = $u;
-    for (my $i = 1; $i < $iter; $i++) {
-        $u = hmac_sha256($u, $password);
-        $out ^= $u;
-    }
-    return unpack('H*', $out);
-}
-
-# ハッシュの比較は、一致した文字数から情報が漏れないよう定数時間で行う。
-sub const_eq {
-    my ($x, $y) = @_;
-    return 0 if length($x) != length($y);
-    my $r = 0;
-    $r |= ord(substr($x, $_, 1)) ^ ord(substr($y, $_, 1)) for 0 .. length($x) - 1;
-    return $r == 0;
-}
-
-sub get_cookie {
-    my ($name) = @_;
-    my $raw = $ENV{HTTP_COOKIE} || '';
-    for my $pair (split /;\s*/, $raw) {
-        my ($k, $v) = split /=/, $pair, 2;
-        next unless defined $k && $k eq $name;
-        return defined $v ? $v : '';
-    }
-    return undef;
-}
-
-sub set_session_cookie {
-    my ($token) = @_;
-    my $max = $SESSION_DAYS * 24 * 3600;
-    add_header("Set-Cookie: $COOKIE_NAME=$token; Path=$COOKIE_PATH; Max-Age=$max; HttpOnly; Secure; SameSite=Lax");
-}
-
-sub clear_session_cookie {
-    add_header("Set-Cookie: $COOKIE_NAME=; Path=$COOKIE_PATH; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
-}
-
-sub purge_expired_sessions {
-    my ($dbh) = @_;
-    eval { $dbh->do('DELETE FROM sessions WHERE expires_at < now()'); 1 }
-        or warn "purge_expired_sessions failed: $@\n";
-}
-
-sub start_session {
-    my ($dbh, $uid) = @_;
-    my $token = random_hex(32);
-    $dbh->do(
-        "INSERT INTO sessions (token, user_id, expires_at)
-         VALUES (?,?, now() + interval '$SESSION_DAYS days')",
-        undef, $token, $uid
-    );
-    purge_expired_sessions($dbh);
-    set_session_cookie($token);
-}
-
-# 現在のログインユーザー {id, username, email}。未ログインなら undef。
-sub current_user {
-    my ($dbh) = @_;
-    my $token = get_cookie($COOKIE_NAME);
-    return undef unless defined $token && $token =~ /^[0-9a-f]{16,128}$/;
-    return $dbh->selectrow_hashref(
-        'SELECT u.id, u.username, u.email FROM sessions s
-           JOIN users u ON u.id = s.user_id
-          WHERE s.token = ? AND s.expires_at > now()',
-        undef, $token
-    );
-}
-
-sub require_user {
-    my ($dbh) = @_;
-    my $u = current_user($dbh);
-    fail('not_authenticated', '401 Unauthorized') unless $u;
-    return $u;
-}
-
+# ---- メモの読み書き --------------------------------------------------------
 sub ensure_data_dir {
     mkdir $DATA_DIR unless -d $DATA_DIR;
 }
@@ -284,32 +186,6 @@ sub next_id {
         }
     }
     return sprintf('%s_%04d', $date, $max_seq + 1);
-}
-
-sub read_body_json {
-    my $length = $ENV{CONTENT_LENGTH} || 0;
-    return {} if $length <= 0;
-    # 読み込む前に上限で弾く（CONTENT_LENGTH を鵜呑みにしてメモリを食い潰さない）。
-    fail("payload too large", "413 Payload Too Large") if $length > $MAX_BODY_BYTES;
-    my $raw = '';
-    read(STDIN, $raw, $length);
-    return {} if !defined $raw || $raw eq '';
-    my $data = eval { $JSON->decode($raw) };
-    return $data && ref($data) eq 'HASH' ? $data : {};
-}
-
-sub query_param {
-    my ($name) = @_;
-    my $qs = $ENV{QUERY_STRING} || '';
-    for my $pair (split /&/, $qs) {
-        my ($k, $v) = split /=/, $pair, 2;
-        next unless defined $k && $k eq $name;
-        $v = '' unless defined $v;
-        $v =~ tr/+/ /;
-        $v =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-        return $v;
-    }
-    return undef;
 }
 
 sub get_id { return query_param('id'); }

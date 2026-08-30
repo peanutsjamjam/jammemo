@@ -10,31 +10,23 @@
 
 use strict;
 use warnings;
-use Digest::SHA qw(hmac_sha256);
+use File::Basename qw(dirname);
+
+# パスワードのハッシュは api.cgi と同じ実装でなければならないので、共通ライブラリ
+# PJJ::Crypt を使う（api.cgi の1つ上のディレクトリの env.pl が置き場所を教える）。
+our $PJJ_LIB;
+BEGIN {
+    require Cwd;   # require は相対パスだと @INC を探すので絶対パスにする
+    my $env_file = Cwd::abs_path(dirname(__FILE__) . '/..') . '/env.pl';
+    require $env_file if -f $env_file;
+    my ($lib) = grep { defined && length && -d } (
+        $ENV{PJJ_LIB}, $PJJ_LIB, '/var/lib/perl5', '/home/sugawara/lib/perl5');
+    die "PJJ library not found\n" unless $lib;
+    unshift @INC, $lib;
+}
+use PJJ::Crypt qw(random_hex pbkdf2);
 
 my $ITER = 120000;   # api.cgi の $PBKDF2_ITER と揃えること
-
-sub random_hex {
-    my ($bytes) = @_;
-    open my $fh, '<:raw', '/dev/urandom' or die "urandom: $!";
-    read($fh, my $buf, $bytes);
-    close $fh;
-    return unpack('H*', $buf);
-}
-
-# api.cgi の pbkdf2() と同じ実装（dkLen = ハッシュ長1ブロックぶん）。
-sub pbkdf2 {
-    my ($password, $salt_hex, $iter) = @_;
-    my $salt = pack('H*', $salt_hex);
-    utf8::encode($password) if utf8::is_utf8($password);
-    my $u   = hmac_sha256($salt . pack('N', 1), $password);
-    my $out = $u;
-    for (my $i = 1; $i < $iter; $i++) {
-        $u = hmac_sha256($u, $password);
-        $out ^= $u;
-    }
-    return unpack('H*', $out);
-}
 
 sub quote_sql {
     my ($s) = @_;
